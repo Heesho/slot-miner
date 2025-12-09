@@ -25,35 +25,34 @@ const MIN_INIT_PRICE = convert("1", 18); // 1 LP
 /*===================================================================*/
 
 // Contract Variables
-let unit, miner, auction, multicall;
+let unit, rig, auction, multicall;
 
 /*===================================================================*/
 /*===========================  CONTRACT DATA  =======================*/
 
 async function getContracts() {
-  miner = await ethers.getContractAt(
-    "contracts/Miner.sol:Miner",
-    "0xcD56904138618a457e6709A7CB5F11C7D1f49A94"
+  rig = await ethers.getContractAt(
+    "contracts/Rig.sol:Rig",
+    "0x9C8959C9675f26852Ed9E048c92C5d32C9eE7513"
   );
-  unit = await ethers.getContractAt(
-    "contracts/Miner.sol:Unit",
-    await miner.unit()
-  );
+  unit = await ethers.getContractAt("contracts/Rig.sol:Unit", await rig.unit());
   multicall = await ethers.getContractAt(
     "contracts/Multicall.sol:Multicall",
-    "0x5833A6543e4455079F098DE7746518A33Ab1Addf"
+    "0x027F9C2306f998a2994005eEc1a5F61c2259Af8D"
   );
   // auction = await ethers.getContractAt("contracts/Auction.sol:Auction", "");
-  // console.log("Contracts Retrieved");
+  console.log("Contracts Retrieved");
 }
 
 /*===========================  END CONTRACT DATA  ===================*/
 /*===================================================================*/
 
-async function deployMiner() {
-  console.log("Starting Miner Deployment");
-  const minerArtifact = await ethers.getContractFactory("Miner");
-  const minerContract = await minerArtifact.deploy(
+async function deployRig() {
+  console.log("Starting Rig Deployment");
+  const rigArtifact = await ethers.getContractFactory("Rig");
+  const rigContract = await rigArtifact.deploy(
+    "DonatardioTest",
+    "DOTARD",
     WETH_ADDRESS,
     ENTROPY_ADDRESS,
     TREASURY_ADDRESS,
@@ -61,34 +60,41 @@ async function deployMiner() {
       gasPrice: ethers.gasPrice,
     }
   );
-  miner = await minerContract.deployed();
+  rig = await rigContract.deployed();
   await sleep(5000);
-  console.log("Miner Deployed at:", miner.address);
+  console.log("Rig Deployed at:", rig.address);
 }
 
 async function verifyUnit() {
   console.log("Starting Unit Verification");
   await hre.run("verify:verify", {
     address: unit.address,
-    contract: "contracts/Miner.sol:Unit",
+    contract: "contracts/Rig.sol:Unit",
+    constructorArguments: ["DonatardioTest", "DOTARD"],
   });
   console.log("Unit Verified");
 }
 
-async function verifyMiner() {
-  console.log("Starting Miner Verification");
+async function verifyRig() {
+  console.log("Starting Rig Verification");
   await hre.run("verify:verify", {
-    address: miner.address,
-    contract: "contracts/Miner.sol:Miner",
-    constructorArguments: [WETH_ADDRESS, ENTROPY_ADDRESS, TREASURY_ADDRESS],
+    address: rig.address,
+    contract: "contracts/Rig.sol:Rig",
+    constructorArguments: [
+      "DonatardioTest",
+      "DOTARD",
+      WETH_ADDRESS,
+      ENTROPY_ADDRESS,
+      TREASURY_ADDRESS,
+    ],
   });
-  console.log("Miner Verified");
+  console.log("Rig Verified");
 }
 
 async function deployMulticall() {
   console.log("Starting Multicall Deployment");
   const multicallArtifact = await ethers.getContractFactory("Multicall");
-  const multicallContract = await multicallArtifact.deploy(miner.address, {
+  const multicallContract = await multicallArtifact.deploy(rig.address, {
     gasPrice: ethers.gasPrice,
   });
   multicall = await multicallContract.deployed();
@@ -101,7 +107,7 @@ async function verifyMulticall() {
   await hre.run("verify:verify", {
     address: multicall.address,
     contract: "contracts/Multicall.sol:Multicall",
-    constructorArguments: [miner.address],
+    constructorArguments: [rig.address],
   });
   console.log("Multicall Verified");
 }
@@ -145,7 +151,7 @@ async function verifyAuction() {
 async function printDeployment() {
   console.log("**************************************************************");
   console.log("Unit: ", unit.address);
-  console.log("Miner: ", miner.address);
+  console.log("Rig: ", rig.address);
   console.log("Multicall: ", multicall.address);
   // console.log("Auction: ", auction.address);
   console.log("**************************************************************");
@@ -162,10 +168,10 @@ async function main() {
   //===================================================================
 
   // console.log("Starting System Deployment");
-  // await deployMiner();
+  // await deployRig();
   // await deployAuction();
   // await deployMulticall();
-  // await printDeployment();
+  await printDeployment();
 
   /*********** UPDATE getContracts() with new addresses *************/
 
@@ -176,7 +182,7 @@ async function main() {
   // console.log("Starting System Verification");
   // await verifyUnit();
   // await sleep(5000);
-  // await verifyMiner();
+  // await verifyRig();
   // await sleep(5000);
   // await verifyMulticall();
   // await sleep(5000);
@@ -187,32 +193,29 @@ async function main() {
   // Transactions
   //===================================================================
 
-  // set multipliers on
-
-  // const multipliers = [
-  //   ...Array(5).fill(convert("1.0", 18)),
-  //   ...Array(4).fill(convert("2.0", 18)),
-  //   ...Array(3).fill(convert("3.0", 18)),
-  //   ...Array(2).fill(convert("5.0", 18)),
-  //   ...Array(1).fill(convert("10.0", 18)),
+  // set odds (in basis points: 100 = 1%, 5000 = 50%)
+  // Slot machine style distribution:
+  // const odds = [
+  //   ...Array(100).fill(100),   // 50% chance of 1%   (3x Cherry)
+  //   ...Array(50).fill(200),    // 25% chance of 2%   (3x Lemon)
+  //   ...Array(30).fill(500),    // 15% chance of 5%   (3x Bar)
+  //   ...Array(14).fill(1000),   // 7% chance of 10%   (3x Bell)
+  //   ...Array(5).fill(2500),    // 2.5% chance of 25% (3x 7)
+  //   ...Array(1).fill(5000),    // 0.5% chance of 50% (3x Diamond)
   // ];
-  // await miner.setMultipliers(multipliers);
-  // console.log("Multipliers set on Miner");
+  // await rig.setOdds(odds);
+  // console.log("Odds set on Rig");
 
-  // set treasury on miner to auction
-  // await miner.setTreasury(auction.address);
-  // console.log("Treasury set on Miner to Auction");
+  // set treasury on rig to auction
+  // await rig.setTreasury(auction.address);
+  // console.log("Treasury set on Rig to Auction");
 
-  // set ownership of miner to multisig
-  // await miner.transferOwnership(DAO_ADDRESS);
-  // console.log("Ownership of Miner transferred to DAO");
+  // set ownership of rig to multisig
+  // await rig.transferOwnership(DAO_ADDRESS);
+  // console.log("Ownership of Rig transferred to DAO");
 
   // console.log("Slot 0: ", await multicall.getSlot(0));
-  // console.log("Slot 0: ", await miner.getSlot(0));
-
-  // increase capacity to 256
-  // await miner.setCapacity(256);
-  // console.log("Capacity set to 256");
+  // console.log("Slot 0: ", await rig.getSlot(0));
 }
 
 main()

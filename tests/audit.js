@@ -7,7 +7,7 @@ const AddressZero = "0x0000000000000000000000000000000000000000";
 const MaxUint256 = ethers.constants.MaxUint256;
 
 let owner, multisig, treasury, team, attacker, user0, user1, user2, entropyProvider;
-let weth, unit, miner, entropy;
+let weth, unit, rig, entropy;
 
 // Helper to get current block timestamp
 async function getTimestamp() {
@@ -17,17 +17,17 @@ async function getTimestamp() {
 
 // Helper to spin
 async function spin(user, maxPriceOverride = null) {
-  const epochId = await miner.epochId();
-  const price = await miner.getPrice();
+  const epochId = await rig.epochId();
+  const price = await rig.getPrice();
   const maxPrice = maxPriceOverride !== null ? maxPriceOverride : price;
   const timestamp = await getTimestamp();
   const deadline = timestamp + 3600;
-  const entropyFee = await miner.getEntropyFee();
+  const entropyFee = await rig.getEntropyFee();
 
-  return miner.connect(user).spin(user.address, epochId, deadline, maxPrice, { value: entropyFee });
+  return rig.connect(user).spin(user.address, epochId, deadline, maxPrice, { value: entropyFee });
 }
 
-describe("Miner Security Audit Tests", function () {
+describe("Rig Security Audit Tests", function () {
 
   beforeEach("Fresh deployment for each test", async function () {
     [owner, multisig, treasury, team, attacker, user0, user1, user2, entropyProvider] =
@@ -39,32 +39,34 @@ describe("Miner Security Audit Tests", function () {
     const entropyArtifact = await ethers.getContractFactory("TestMockEntropy");
     entropy = await entropyArtifact.deploy(entropyProvider.address);
 
+    const rigArtifact = await ethers.getContractFactory("Rig");
+    rig = await rigArtifact.deploy(
+      "Luck",
+      "LUCK",
+      weth.address,
+      entropy.address,
+      treasury.address
+    );
+
+    // Set team and odds after deployment
+    await rig.setTeam(team.address);
+
     // Standard odds: 89% -> 1%, 10% -> 5%, 1% -> 50%
     const defaultOdds = [
       ...Array(89).fill(100),
       ...Array(10).fill(500),
       ...Array(1).fill(5000),
     ];
+    await rig.setOdds(defaultOdds);
 
-    const minerArtifact = await ethers.getContractFactory("Miner");
-    miner = await minerArtifact.deploy(
-      "Luck",
-      "LUCK",
-      weth.address,
-      entropy.address,
-      treasury.address,
-      team.address,
-      defaultOdds
-    );
+    unit = await ethers.getContractAt("contracts/Rig.sol:Unit", await rig.unit());
 
-    unit = await ethers.getContractAt("contracts/Miner.sol:Unit", await miner.unit());
-
-    await miner.transferOwnership(multisig.address);
+    await rig.transferOwnership(multisig.address);
 
     // Fund users with WETH (keep ETH for gas)
     for (const user of [attacker, user0, user1, user2]) {
       await weth.connect(user).deposit({ value: convert("100", 18) });
-      await weth.connect(user).approve(miner.address, MaxUint256);
+      await weth.connect(user).approve(rig.address, MaxUint256);
     }
   });
 
@@ -88,7 +90,7 @@ describe("Miner Security Audit Tests", function () {
       await spin(user1);
 
       // Verify state is consistent
-      expect(await miner.epochId()).to.equal(2);
+      expect(await rig.epochId()).to.equal(2);
     });
 
     it("CRITICAL: VRF callback should not be callable by external actors", async function () {
@@ -118,46 +120,46 @@ describe("Miner Security Audit Tests", function () {
     it("CRITICAL: Only owner can call admin functions", async function () {
       // setTreasury
       await expect(
-        miner.connect(attacker).setTreasury(attacker.address)
+        rig.connect(attacker).setTreasury(attacker.address)
       ).to.be.revertedWith("Ownable: caller is not the owner");
 
       // setTeam
       await expect(
-        miner.connect(attacker).setTeam(attacker.address)
+        rig.connect(attacker).setTeam(attacker.address)
       ).to.be.revertedWith("Ownable: caller is not the owner");
 
       // setOdds
       await expect(
-        miner.connect(attacker).setOdds([100, 200])
+        rig.connect(attacker).setOdds([100, 200])
       ).to.be.revertedWith("Ownable: caller is not the owner");
     });
 
     it("CRITICAL: Ownership transfer works correctly", async function () {
       // Current owner is multisig
-      expect(await miner.owner()).to.equal(multisig.address);
+      expect(await rig.owner()).to.equal(multisig.address);
 
       // Transfer to new owner
-      await miner.connect(multisig).transferOwnership(user0.address);
-      expect(await miner.owner()).to.equal(user0.address);
+      await rig.connect(multisig).transferOwnership(user0.address);
+      expect(await rig.owner()).to.equal(user0.address);
 
       // Old owner can no longer call admin functions
       await expect(
-        miner.connect(multisig).setTreasury(attacker.address)
+        rig.connect(multisig).setTreasury(attacker.address)
       ).to.be.revertedWith("Ownable: caller is not the owner");
 
       // New owner can call admin functions
-      await miner.connect(user0).setTeam(user1.address);
-      expect(await miner.team()).to.equal(user1.address);
+      await rig.connect(user0).setTeam(user1.address);
+      expect(await rig.team()).to.equal(user1.address);
     });
 
     it("CRITICAL: Cannot renounce ownership and brick contract", async function () {
       // Test that renouncing ownership is possible but admin functions become uncallable
-      await miner.connect(multisig).renounceOwnership();
-      expect(await miner.owner()).to.equal(AddressZero);
+      await rig.connect(multisig).renounceOwnership();
+      expect(await rig.owner()).to.equal(AddressZero);
 
       // Admin functions now permanently disabled
       await expect(
-        miner.connect(multisig).setOdds([100])
+        rig.connect(multisig).setOdds([100])
       ).to.be.revertedWith("Ownable: caller is not the owner");
     });
   });
@@ -187,14 +189,14 @@ describe("Miner Security Audit Tests", function () {
       await spin(user2);
 
       // Pool after spin but before callback
-      const poolBeforeCallback = await miner.getPrizePool();
+      const poolBeforeCallback = await rig.getPrizePool();
       expect(poolBeforeCallback).to.be.gt(0);
 
       // Trigger VRF callback
       await entropy.mockReveal(entropyProvider.address, 3, ethers.utils.randomBytes(32));
 
       const user2BalanceAfter = await unit.balanceOf(user2.address);
-      const poolAfterCallback = await miner.getPrizePool();
+      const poolAfterCallback = await rig.getPrizePool();
 
       // User2 should have won something
       expect(user2BalanceAfter).to.be.gt(0);
@@ -210,13 +212,13 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [1800]);
       await ethers.provider.send("evm_mine", []);
 
-      const price = await miner.getPrice();
+      const price = await rig.getPrice();
       const treasuryBefore = await weth.balanceOf(treasury.address);
       const teamBefore = await weth.balanceOf(team.address);
 
       const tx = await spin(user1);
       const receipt = await tx.wait();
-      const spinEvent = receipt.events.find(e => e.event === "Miner__Spin");
+      const spinEvent = receipt.events.find(e => e.event === "Rig__Spin");
       const actualPrice = spinEvent.args.price;
 
       const treasuryAfter = await weth.balanceOf(treasury.address);
@@ -235,8 +237,8 @@ describe("Miner Security Audit Tests", function () {
 
     it("CRITICAL: Cannot set treasury to zero and lose fees", async function () {
       await expect(
-        miner.connect(multisig).setTreasury(AddressZero)
-      ).to.be.revertedWith("Miner__InvalidTreasury");
+        rig.connect(multisig).setTreasury(AddressZero)
+      ).to.be.revertedWith("Rig__InvalidTreasury");
     });
   });
 
@@ -245,45 +247,45 @@ describe("Miner Security Audit Tests", function () {
   // ============================================
   describe("Input Validation", function () {
     it("HIGH: Spinner address cannot be zero", async function () {
-      const epochId = await miner.epochId();
+      const epochId = await rig.epochId();
       const timestamp = await getTimestamp();
       const deadline = timestamp + 3600;
-      const entropyFee = await miner.getEntropyFee();
+      const entropyFee = await rig.getEntropyFee();
 
       await expect(
-        miner.connect(user0).spin(AddressZero, epochId, deadline, 0, { value: entropyFee })
-      ).to.be.revertedWith("Miner__InvalidSpinner");
+        rig.connect(user0).spin(AddressZero, epochId, deadline, 0, { value: entropyFee })
+      ).to.be.revertedWith("Rig__InvalidSpinner");
     });
 
     it("HIGH: Epoch ID must match current epoch", async function () {
-      const epochId = await miner.epochId();
+      const epochId = await rig.epochId();
       const timestamp = await getTimestamp();
       const deadline = timestamp + 3600;
-      const entropyFee = await miner.getEntropyFee();
+      const entropyFee = await rig.getEntropyFee();
 
       // Wrong epoch (too high)
       await expect(
-        miner.connect(user0).spin(user0.address, epochId.add(1), deadline, 0, { value: entropyFee })
-      ).to.be.revertedWith("Miner__EpochIdMismatch");
+        rig.connect(user0).spin(user0.address, epochId.add(1), deadline, 0, { value: entropyFee })
+      ).to.be.revertedWith("Rig__EpochIdMismatch");
 
       // Do a spin to increment epoch
       await spin(user0);
 
       // Old epoch ID should fail
       await expect(
-        miner.connect(user0).spin(user0.address, epochId, deadline, 0, { value: entropyFee })
-      ).to.be.revertedWith("Miner__EpochIdMismatch");
+        rig.connect(user0).spin(user0.address, epochId, deadline, 0, { value: entropyFee })
+      ).to.be.revertedWith("Rig__EpochIdMismatch");
     });
 
     it("HIGH: Deadline must not be expired", async function () {
-      const epochId = await miner.epochId();
+      const epochId = await rig.epochId();
       const timestamp = await getTimestamp();
       const expiredDeadline = timestamp - 1;
-      const entropyFee = await miner.getEntropyFee();
+      const entropyFee = await rig.getEntropyFee();
 
       await expect(
-        miner.connect(user0).spin(user0.address, epochId, expiredDeadline, 0, { value: entropyFee })
-      ).to.be.revertedWith("Miner__Expired");
+        rig.connect(user0).spin(user0.address, epochId, expiredDeadline, 0, { value: entropyFee })
+      ).to.be.revertedWith("Rig__Expired");
     });
 
     it("HIGH: Max price slippage protection works", async function () {
@@ -294,21 +296,21 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_mine", []);
 
       // Price should now be about half of initPrice
-      const price = await miner.getPrice();
+      const price = await rig.getPrice();
       expect(price).to.be.gt(0);
 
-      const epochId = await miner.epochId();
+      const epochId = await rig.epochId();
       const timestamp = await getTimestamp();
       const deadline = timestamp + 3600;
-      const entropyFee = await miner.getEntropyFee();
+      const entropyFee = await rig.getEntropyFee();
 
       // Set maxPrice to 0 when price is non-zero - should fail
       let reverted = false;
       try {
-        await miner.connect(user0).spin(user0.address, epochId, deadline, 0, { value: entropyFee });
+        await rig.connect(user0).spin(user0.address, epochId, deadline, 0, { value: entropyFee });
       } catch (e) {
         reverted = true;
-        expect(e.message).to.include("Miner__MaxPriceExceeded");
+        expect(e.message).to.include("Rig__MaxPriceExceeded");
       }
       expect(reverted).to.be.true;
     });
@@ -316,27 +318,27 @@ describe("Miner Security Audit Tests", function () {
     it("HIGH: Odds validation prevents invalid configurations", async function () {
       // Empty array
       await expect(
-        miner.connect(multisig).setOdds([])
-      ).to.be.revertedWith("Miner__InvalidOdds");
+        rig.connect(multisig).setOdds([])
+      ).to.be.revertedWith("Rig__InvalidOdds");
 
       // Below minimum (100 bps = 1%)
       await expect(
-        miner.connect(multisig).setOdds([99])
-      ).to.be.revertedWith("Miner__OddsTooLow");
+        rig.connect(multisig).setOdds([99])
+      ).to.be.revertedWith("Rig__OddsTooLow");
 
       await expect(
-        miner.connect(multisig).setOdds([0])
-      ).to.be.revertedWith("Miner__OddsTooLow");
+        rig.connect(multisig).setOdds([0])
+      ).to.be.revertedWith("Rig__OddsTooLow");
 
       // Above maximum (10000 bps = 100%)
       await expect(
-        miner.connect(multisig).setOdds([10001])
-      ).to.be.revertedWith("Miner__InvalidOdds");
+        rig.connect(multisig).setOdds([10001])
+      ).to.be.revertedWith("Rig__InvalidOdds");
 
       // Mixed valid and invalid
       await expect(
-        miner.connect(multisig).setOdds([100, 50, 500]) // 50 is below min
-      ).to.be.revertedWith("Miner__OddsTooLow");
+        rig.connect(multisig).setOdds([100, 50, 500]) // 50 is below min
+      ).to.be.revertedWith("Rig__OddsTooLow");
     });
   });
 
@@ -353,7 +355,7 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [1800]);
       await ethers.provider.send("evm_mine", []);
 
-      const epochId = await miner.epochId();
+      const epochId = await rig.epochId();
 
       // Both transactions submitted with same epochId
       // Only one can succeed - the other will fail with EpochIdMismatch
@@ -362,11 +364,11 @@ describe("Miner Security Audit Tests", function () {
       // User0's transaction would now fail because epoch changed
       const timestamp = await getTimestamp();
       const deadline = timestamp + 3600;
-      const entropyFee = await miner.getEntropyFee();
+      const entropyFee = await rig.getEntropyFee();
 
       await expect(
-        miner.connect(user0).spin(user0.address, epochId, deadline, MaxUint256, { value: entropyFee })
-      ).to.be.revertedWith("Miner__EpochIdMismatch");
+        rig.connect(user0).spin(user0.address, epochId, deadline, MaxUint256, { value: entropyFee })
+      ).to.be.revertedWith("Rig__EpochIdMismatch");
     });
 
     it("HIGH: Price manipulation via timing is limited", async function () {
@@ -376,13 +378,13 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [3599]); // Just before epoch end
       await ethers.provider.send("evm_mine", []);
 
-      const priceLow = await miner.getPrice();
+      const priceLow = await rig.getPrice();
 
       // Spin at low price
       await spin(attacker);
 
       // New init price is based on price paid * 2, clamped to MIN_INIT_PRICE
-      const newInitPrice = await miner.initPrice();
+      const newInitPrice = await rig.initPrice();
       const MIN_INIT_PRICE = ethers.utils.parseEther("0.0001");
 
       // Price should be at minimum since low price * 2 < MIN_INIT_PRICE
@@ -399,17 +401,17 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [1800]);
       await ethers.provider.send("evm_mine", []);
 
-      const priceBefore = await miner.getPrice();
+      const priceBefore = await rig.getPrice();
       const userBalBefore = await weth.balanceOf(user1.address);
 
-      const epochId = await miner.epochId();
+      const epochId = await rig.epochId();
       const timestamp = await getTimestamp();
       const deadline = timestamp + 3600;
-      const entropyFee = await miner.getEntropyFee();
+      const entropyFee = await rig.getEntropyFee();
 
-      const tx = await miner.connect(user1).spin(user1.address, epochId, deadline, MaxUint256, { value: entropyFee });
+      const tx = await rig.connect(user1).spin(user1.address, epochId, deadline, MaxUint256, { value: entropyFee });
       const receipt = await tx.wait();
-      const spinEvent = receipt.events.find(e => e.event === "Miner__Spin");
+      const spinEvent = receipt.events.find(e => e.event === "Rig__Spin");
       const actualPrice = spinEvent.args.price;
 
       const userBalAfter = await weth.balanceOf(user1.address);
@@ -428,7 +430,7 @@ describe("Miner Security Audit Tests", function () {
         await ethers.provider.send("evm_mine", []);
       }
 
-      const poolBefore = await miner.getPrizePool();
+      const poolBefore = await rig.getPrizePool();
 
       // Attacker tries rapid spinning
       // Each spin requires waiting for auction price and paying for it
@@ -440,7 +442,7 @@ describe("Miner Security Audit Tests", function () {
         await entropy.mockReveal(entropyProvider.address, i + 6, ethers.utils.randomBytes(32));
       }
 
-      const poolAfter = await miner.getPrizePool();
+      const poolAfter = await rig.getPrizePool();
       const attackerBalance = await unit.balanceOf(attacker.address);
 
       // Pool should have decreased, but attacker also paid fees
@@ -455,7 +457,7 @@ describe("Miner Security Audit Tests", function () {
   // ============================================
   describe("Edge Cases", function () {
     it("MEDIUM: First spin is free (price = 0, initPrice = 0)", async function () {
-      const price = await miner.getPrice();
+      const price = await rig.getPrice();
       expect(price).to.equal(0);
 
       const treasuryBefore = await weth.balanceOf(treasury.address);
@@ -478,14 +480,14 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [3600]);
       await ethers.provider.send("evm_mine", []);
 
-      const price = await miner.getPrice();
+      const price = await rig.getPrice();
       expect(price).to.equal(0);
 
       // Just after epoch end
       await ethers.provider.send("evm_increaseTime", [1]);
       await ethers.provider.send("evm_mine", []);
 
-      const priceAfter = await miner.getPrice();
+      const priceAfter = await rig.getPrice();
       expect(priceAfter).to.equal(0);
     });
 
@@ -497,7 +499,7 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [oneYear]);
       await ethers.provider.send("evm_mine", []);
 
-      const pendingEmissions = await miner.getPendingEmissions();
+      const pendingEmissions = await rig.getPendingEmissions();
 
       // Should have accumulated significant emissions (with halvings)
       expect(pendingEmissions).to.be.gt(0);
@@ -505,12 +507,12 @@ describe("Miner Security Audit Tests", function () {
       // Spin to mint emissions
       await spin(user1);
 
-      const pool = await miner.getPrizePool();
+      const pool = await rig.getPrizePool();
       expect(pool).to.be.closeTo(pendingEmissions, pendingEmissions.div(100));
     });
 
     it("MEDIUM: Maximum odds value (100% = 10000 bps)", async function () {
-      await miner.connect(multisig).setOdds([10000]); // 100% payout
+      await rig.connect(multisig).setOdds([10000]); // 100% payout
 
       // Build pool
       await spin(user0);
@@ -519,20 +521,20 @@ describe("Miner Security Audit Tests", function () {
 
       await spin(user1);
 
-      const poolBefore = await miner.getPrizePool();
+      const poolBefore = await rig.getPrizePool();
 
       // Trigger VRF - should win 100% of pool
       await entropy.mockReveal(entropyProvider.address, 2, ethers.utils.randomBytes(32));
 
       const user1Balance = await unit.balanceOf(user1.address);
-      const poolAfter = await miner.getPrizePool();
+      const poolAfter = await rig.getPrizePool();
 
       expect(user1Balance).to.equal(poolBefore);
       expect(poolAfter).to.equal(0);
     });
 
     it("MEDIUM: Minimum odds value (1% = 100 bps)", async function () {
-      await miner.connect(multisig).setOdds([100]); // 1% payout
+      await rig.connect(multisig).setOdds([100]); // 1% payout
 
       // Build pool
       await spin(user0);
@@ -541,7 +543,7 @@ describe("Miner Security Audit Tests", function () {
 
       await spin(user1);
 
-      const poolBefore = await miner.getPrizePool();
+      const poolBefore = await rig.getPrizePool();
 
       // Trigger VRF - should win 1% of pool
       await entropy.mockReveal(entropyProvider.address, 2, ethers.utils.randomBytes(32));
@@ -554,16 +556,16 @@ describe("Miner Security Audit Tests", function () {
 
     it("MEDIUM: Empty prize pool scenario", async function () {
       // Set 100% odds to drain pool
-      await miner.connect(multisig).setOdds([10000]);
+      await rig.connect(multisig).setOdds([10000]);
 
       await spin(user0);
 
-      const poolBefore = await miner.getPrizePool();
+      const poolBefore = await rig.getPrizePool();
 
       // Win everything
       await entropy.mockReveal(entropyProvider.address, 1, ethers.utils.randomBytes(32));
 
-      const poolAfter = await miner.getPrizePool();
+      const poolAfter = await rig.getPrizePool();
       expect(poolAfter).to.equal(0);
 
       // Next spin should still work, but winner gets 0
@@ -582,13 +584,13 @@ describe("Miner Security Audit Tests", function () {
       // epochId is uint256, overflow is practically impossible
       // but verify incrementing works correctly
 
-      const initialEpoch = await miner.epochId();
+      const initialEpoch = await rig.epochId();
 
       for (let i = 0; i < 10; i++) {
         await spin(user0);
       }
 
-      const finalEpoch = await miner.epochId();
+      const finalEpoch = await rig.epochId();
       expect(finalEpoch).to.equal(initialEpoch.add(10));
     });
   });
@@ -640,14 +642,14 @@ describe("Miner Security Audit Tests", function () {
     it("MEDIUM: VRF callback for unknown sequence reverts at provider", async function () {
       await spin(user0);
 
-      const poolBefore = await miner.getPrizePool();
+      const poolBefore = await rig.getPrizePool();
 
       // Callback with non-existent sequence number - provider rejects it
       await expect(
         entropy.mockReveal(entropyProvider.address, 999, ethers.utils.randomBytes(32))
       ).to.be.revertedWith("Request not found");
 
-      const poolAfter = await miner.getPrizePool();
+      const poolAfter = await rig.getPrizePool();
 
       // Pool unchanged since callback never reached our contract
       expect(poolAfter).to.equal(poolBefore);
@@ -658,14 +660,14 @@ describe("Miner Security Audit Tests", function () {
       const seqNum = 1;
 
       // Before callback, mapping should have user0
-      const spinnerBefore = await miner.sequence_Spinner(seqNum);
+      const spinnerBefore = await rig.sequence_Spinner(seqNum);
       expect(spinnerBefore).to.equal(user0.address);
 
       // Trigger callback
       await entropy.mockReveal(entropyProvider.address, seqNum, ethers.utils.randomBytes(32));
 
       // After callback, mapping should be cleared
-      const spinnerAfter = await miner.sequence_Spinner(seqNum);
+      const spinnerAfter = await rig.sequence_Spinner(seqNum);
       expect(spinnerAfter).to.equal(AddressZero);
     });
   });
@@ -674,11 +676,11 @@ describe("Miner Security Audit Tests", function () {
   // LOW: Unit Token Security
   // ============================================
   describe("Unit Token Security", function () {
-    it("LOW: Only miner can mint Unit tokens", async function () {
+    it("LOW: Only rig can mint Unit tokens", async function () {
       // Try to mint directly
       await expect(
         unit.connect(attacker).mint(attacker.address, convert("1000000", 18))
-      ).to.be.revertedWith("Unit__NotMiner");
+      ).to.be.revertedWith("Unit__NotRig");
     });
 
     it("LOW: Anyone can burn their own tokens", async function () {
@@ -724,7 +726,7 @@ describe("Miner Security Audit Tests", function () {
 
       const tx = await spin(user1);
       const receipt = await tx.wait();
-      const spinEvent = receipt.events.find(e => e.event === "Miner__Spin");
+      const spinEvent = receipt.events.find(e => e.event === "Rig__Spin");
       const price = spinEvent.args.price;
 
       const treasuryAfter = await weth.balanceOf(treasury.address);
@@ -744,7 +746,7 @@ describe("Miner Security Audit Tests", function () {
         await entropy.mockReveal(entropyProvider.address, i + 1, ethers.utils.randomBytes(32));
       }
 
-      const pool = await miner.getPrizePool();
+      const pool = await rig.getPrizePool();
       const user0Balance = await unit.balanceOf(user0.address);
       const totalSupply = await unit.totalSupply();
 
@@ -754,11 +756,11 @@ describe("Miner Security Audit Tests", function () {
     });
 
     it("INVARIANT: Epoch ID always increases", async function () {
-      let lastEpoch = await miner.epochId();
+      let lastEpoch = await rig.epochId();
 
       for (let i = 0; i < 10; i++) {
         await spin(user0);
-        const currentEpoch = await miner.epochId();
+        const currentEpoch = await rig.epochId();
         expect(currentEpoch).to.be.gt(lastEpoch);
         lastEpoch = currentEpoch;
       }
@@ -771,14 +773,14 @@ describe("Miner Security Audit Tests", function () {
       await ethers.provider.send("evm_increaseTime", [100 * 365 * 24 * 3600]);
       await ethers.provider.send("evm_mine", []);
 
-      const ups = await miner.getUps();
+      const ups = await rig.getUps();
       expect(ups).to.equal(TAIL_UPS);
 
       // Forward another 100 years
       await ethers.provider.send("evm_increaseTime", [100 * 365 * 24 * 3600]);
       await ethers.provider.send("evm_mine", []);
 
-      const upsLater = await miner.getUps();
+      const upsLater = await rig.getUps();
       expect(upsLater).to.equal(TAIL_UPS);
     });
 
@@ -787,8 +789,8 @@ describe("Miner Security Audit Tests", function () {
 
       // Check at various points in epoch
       for (let minutes = 0; minutes <= 60; minutes += 10) {
-        const initPrice = await miner.initPrice();
-        const price = await miner.getPrice();
+        const initPrice = await rig.initPrice();
+        const price = await rig.getPrice();
 
         expect(price).to.be.lte(initPrice);
 

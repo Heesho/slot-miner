@@ -12,19 +12,19 @@ import {IEntropyV2} from "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 import {IEntropyConsumer} from "@pythnetwork/entropy-sdk-solidity/IEntropyConsumer.sol";
 
 contract Unit is ERC20, ERC20Permit, ERC20Votes {
-    address public immutable miner;
+    address public immutable rig;
 
-    error Unit__NotMiner();
+    error Unit__NotRig();
 
     event Unit__Minted(address account, uint256 amount);
     event Unit__Burned(address account, uint256 amount);
 
     constructor(string memory name, string memory symbol) ERC20(name, symbol) ERC20Permit(name) {
-        miner = msg.sender;
+        rig = msg.sender;
     }
 
     function mint(address account, uint256 amount) external {
-        if (msg.sender != miner) revert Unit__NotMiner();
+        if (msg.sender != rig) revert Unit__NotRig();
         _mint(account, amount);
         emit Unit__Minted(account, amount);
     }
@@ -47,7 +47,7 @@ contract Unit is ERC20, ERC20Permit, ERC20Votes {
     }
 }
 
-contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
+contract Rig is IEntropyConsumer, ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
     // Fee constants (basis points)
@@ -62,7 +62,7 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
     uint256 public constant ABS_MAX_INIT_PRICE = type(uint192).max;
 
     // Emission constants (same as original)
-    uint256 public constant INITIAL_UPS = 2 ether;
+    uint256 public constant INITIAL_UPS = 4 ether;
     uint256 public constant HALVING_PERIOD = 30 days;
     uint256 public constant TAIL_UPS = 0.01 ether;
 
@@ -96,55 +96,50 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
     mapping(uint64 => uint256) public sequence_Epoch;
 
     // Errors
-    error Miner__InvalidSpinner();
-    error Miner__EpochIdMismatch();
-    error Miner__MaxPriceExceeded();
-    error Miner__Expired();
-    error Miner__InsufficientFee();
-    error Miner__InvalidTreasury();
-    error Miner__InvalidOdds();
-    error Miner__OddsTooLow();
+    error Rig__InvalidSpinner();
+    error Rig__EpochIdMismatch();
+    error Rig__MaxPriceExceeded();
+    error Rig__Expired();
+    error Rig__InsufficientFee();
+    error Rig__InvalidTreasury();
+    error Rig__InvalidOdds();
+    error Rig__OddsTooLow();
 
     // Events
-    event Miner__Spin(
+    event Rig__Spin(
         address indexed sender,
         address indexed spinner,
         uint256 indexed epochId,
         uint256 price
     );
-    event Miner__Win(
+    event Rig__Win(
         address indexed spinner,
         uint256 indexed epochId,
         uint256 oddsPercent,
         uint256 amount
     );
-    event Miner__EntropyRequested(uint256 indexed epochId, uint64 indexed sequenceNumber);
-    event Miner__TreasuryFee(address indexed treasury, uint256 indexed epochId, uint256 amount);
-    event Miner__TeamFee(address indexed team, uint256 indexed epochId, uint256 amount);
-    event Miner__EmissionMinted(uint256 indexed epochId, uint256 amount);
-    event Miner__TreasurySet(address indexed treasury);
-    event Miner__TeamSet(address indexed team);
-    event Miner__OddsSet(uint256[] odds);
+    event Rig__EntropyRequested(uint256 indexed epochId, uint64 indexed sequenceNumber);
+    event Rig__TreasuryFee(address indexed treasury, uint256 indexed epochId, uint256 amount);
+    event Rig__TeamFee(address indexed team, uint256 indexed epochId, uint256 amount);
+    event Rig__EmissionMinted(uint256 indexed epochId, uint256 amount);
+    event Rig__TreasurySet(address indexed treasury);
+    event Rig__TeamSet(address indexed team);
+    event Rig__OddsSet(uint256[] odds);
 
     constructor(
         string memory name,
         string memory symbol,
         address _quote,
         address _entropy,
-        address _treasury,
-        address _team,
-        uint256[] memory _odds
+        address _treasury
     ) {
         quote = _quote;
         treasury = _treasury;
-        team = _team;
         startTime = block.timestamp;
         lastEmissionTime = block.timestamp;
         slotStartTime = block.timestamp;
         unit = address(new Unit(name, symbol));
         entropy = IEntropyV2(_entropy);
-
-        _validateAndSetOdds(_odds);
     }
 
     function spin(
@@ -153,12 +148,12 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
         uint256 deadline,
         uint256 maxPrice
     ) external payable nonReentrant returns (uint256 price) {
-        if (spinner == address(0)) revert Miner__InvalidSpinner();
-        if (block.timestamp > deadline) revert Miner__Expired();
-        if (_epochId != epochId) revert Miner__EpochIdMismatch();
+        if (spinner == address(0)) revert Rig__InvalidSpinner();
+        if (block.timestamp > deadline) revert Rig__Expired();
+        if (_epochId != epochId) revert Rig__EpochIdMismatch();
 
         price = getPrice();
-        if (price > maxPrice) revert Miner__MaxPriceExceeded();
+        if (price > maxPrice) revert Rig__MaxPriceExceeded();
 
         // Distribute fees from spin price
         if (price > 0) {
@@ -166,18 +161,18 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
             uint256 treasuryFee = price - teamFee;
 
             IERC20(quote).safeTransferFrom(msg.sender, treasury, treasuryFee);
-            emit Miner__TreasuryFee(treasury, epochId, treasuryFee);
+            emit Rig__TreasuryFee(treasury, epochId, treasuryFee);
 
             if (teamFee > 0) {
                 IERC20(quote).safeTransferFrom(msg.sender, team, teamFee);
-                emit Miner__TeamFee(team, epochId, teamFee);
+                emit Rig__TeamFee(team, epochId, teamFee);
             }
         }
 
         // Mint accumulated emissions to prize pool (this contract)
         uint256 emissionAmount = _mintEmissions();
         if (emissionAmount > 0) {
-            emit Miner__EmissionMinted(epochId, emissionAmount);
+            emit Rig__EmissionMinted(epochId, emissionAmount);
         }
 
         // Update Dutch auction for next epoch
@@ -195,15 +190,15 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
         initPrice = newInitPrice;
         slotStartTime = block.timestamp;
 
-        emit Miner__Spin(msg.sender, spinner, currentEpochId, price);
+        emit Rig__Spin(msg.sender, spinner, currentEpochId, price);
 
         // Request VRF for spin outcome
         uint128 fee = entropy.getFeeV2();
-        if (msg.value < fee) revert Miner__InsufficientFee();
+        if (msg.value < fee) revert Rig__InsufficientFee();
         uint64 seq = entropy.requestV2{value: fee}();
         sequence_Spinner[seq] = spinner;
         sequence_Epoch[seq] = epochId; // Store the NEW epoch (post-increment)
-        emit Miner__EntropyRequested(epochId, seq);
+        emit Rig__EntropyRequested(epochId, seq);
 
         return price;
     }
@@ -227,7 +222,7 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
             IERC20(unit).safeTransfer(spinner, winAmount);
         }
 
-        emit Miner__Win(spinner, epoch, oddsBps, winAmount);
+        emit Rig__Win(spinner, epoch, oddsBps, winAmount);
     }
 
     function _drawOdds(bytes32 randomNumber) internal view returns (uint256) {
@@ -261,27 +256,27 @@ contract Miner is IEntropyConsumer, ReentrancyGuard, Ownable {
 
     function _validateAndSetOdds(uint256[] memory _odds) internal {
         uint256 length = _odds.length;
-        if (length == 0) revert Miner__InvalidOdds();
+        if (length == 0) revert Rig__InvalidOdds();
 
         for (uint256 i = 0; i < length; i++) {
-            if (_odds[i] < MIN_ODDS_BPS) revert Miner__OddsTooLow();
-            if (_odds[i] > MAX_ODDS_BPS) revert Miner__InvalidOdds();
+            if (_odds[i] < MIN_ODDS_BPS) revert Rig__OddsTooLow();
+            if (_odds[i] > MAX_ODDS_BPS) revert Rig__InvalidOdds();
         }
 
         odds = _odds;
-        emit Miner__OddsSet(_odds);
+        emit Rig__OddsSet(_odds);
     }
 
     // Admin functions
     function setTreasury(address _treasury) external onlyOwner {
-        if (_treasury == address(0)) revert Miner__InvalidTreasury();
+        if (_treasury == address(0)) revert Rig__InvalidTreasury();
         treasury = _treasury;
-        emit Miner__TreasurySet(_treasury);
+        emit Rig__TreasurySet(_treasury);
     }
 
     function setTeam(address _team) external onlyOwner {
         team = _team;
-        emit Miner__TeamSet(_team);
+        emit Rig__TeamSet(_team);
     }
 
     function setOdds(uint256[] calldata _odds) external onlyOwner {

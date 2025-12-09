@@ -9,7 +9,7 @@ interface IWETH {
     function deposit() external payable;
 }
 
-interface IMiner {
+interface IRig {
     function unit() external view returns (address);
     function quote() external view returns (address);
     function startTime() external view returns (uint256);
@@ -58,7 +58,7 @@ interface IAuction {
 contract Multicall is Ownable {
     using SafeERC20 for IERC20;
 
-    address public immutable miner;
+    address public immutable rig;
     address public immutable unit;
     address public immutable quote;
 
@@ -66,7 +66,7 @@ contract Multicall is Ownable {
     address public donut;
     address public refPool;
 
-    struct MinerState {
+    struct RigState {
         uint256 ups;
         uint256 unitPrice;
         uint256 unitBalance;
@@ -90,10 +90,10 @@ contract Multicall is Ownable {
         uint256 paymentTokenBalance;
     }
 
-    constructor(address _miner) {
-        miner = _miner;
-        unit = IMiner(miner).unit();
-        quote = IMiner(miner).quote();
+    constructor(address _rig) {
+        rig = _rig;
+        unit = IRig(rig).unit();
+        quote = IRig(rig).quote();
     }
 
     function spin(
@@ -101,12 +101,12 @@ contract Multicall is Ownable {
         uint256 deadline,
         uint256 maxPrice
     ) external payable {
-        uint256 entropyFee = IMiner(miner).getEntropyFee();
+        uint256 entropyFee = IRig(rig).getEntropyFee();
         uint256 payment = msg.value - entropyFee;
         IWETH(quote).deposit{value: payment}();
-        IERC20(quote).safeApprove(miner, 0);
-        IERC20(quote).safeApprove(miner, payment);
-        IMiner(miner).spin{value: entropyFee}(msg.sender, epochId, deadline, maxPrice);
+        IERC20(quote).safeApprove(rig, 0);
+        IERC20(quote).safeApprove(rig, payment);
+        IRig(rig).spin{value: entropyFee}(msg.sender, epochId, deadline, maxPrice);
         uint256 wethBalance = IERC20(quote).balanceOf(address(this));
         if (wethBalance > 0) {
             IERC20(quote).safeTransfer(msg.sender, wethBalance);
@@ -134,12 +134,12 @@ contract Multicall is Ownable {
         refPool = _refPool;
     }
 
-    function getMiner(address account) external view returns (MinerState memory state) {
-        state.ups = IMiner(miner).getUps();
-        state.prizePool = IMiner(miner).getPrizePool();
-        state.pendingEmissions = IMiner(miner).getPendingEmissions();
-        state.epochId = IMiner(miner).epochId();
-        state.price = IMiner(miner).getPrice();
+    function getRig(address account) external view returns (RigState memory state) {
+        state.ups = IRig(rig).getUps();
+        state.prizePool = IRig(rig).getPrizePool();
+        state.pendingEmissions = IRig(rig).getPendingEmissions();
+        state.epochId = IRig(rig).epochId();
+        state.price = IRig(rig).getPrice();
 
         if (auction != address(0)) {
             address pool = IAuction(auction).paymentToken();
@@ -186,10 +186,10 @@ contract Multicall is Ownable {
     }
 
     function getEntropyFee() external view returns (uint256) {
-        return IMiner(miner).getEntropyFee();
+        return IRig(rig).getEntropyFee();
     }
 
     function getOdds() external view returns (uint256[] memory) {
-        return IMiner(miner).getOdds();
+        return IRig(rig).getOdds();
     }
 }
