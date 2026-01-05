@@ -1,5 +1,5 @@
 0) Identity
-We built a slot-style mining game where people pay to spin and chase freshly minted reward units. The project lives inside the Donut ecosystem as a way to create and circulate a new store-of-value candidate, but in this codebase the prize token is an internally minted unit rather than $DONUT itself. GlazeCorp built and maintains the system; DonutDAO can plug it into its wider governance and treasury flows, but nothing here gives GlazeCorp ownership of DonutDAO.
+We built RiskDivision, a slot-style mining game where people pay to spin and chase freshly minted reward units. RiskDivision fits into the Donut ecosystem as the “casino rig” exploration: it routes player payments to a treasury while distributing internally minted reward units, not $DONUT itself. GlazeCorp built and maintains RiskDivision; DonutDAO can connect it to broader governance and treasury choices, but GlazeCorp does not own DonutDAO.
 
 1) The core idea
 Think of a factory-sized arcade cabinet that constantly prints prize coupons into a shared bucket. Anyone can insert payment to pull the lever. Each pull has a chance to scoop out a slice of the bucket, while the bucket keeps growing over time. The cabinet automatically raises or lowers the cost of the next pull based on how recently someone played. Key concepts:
@@ -28,7 +28,7 @@ We want a predictable way to distribute newly created value without needing orde
 5) Repeat: emissions keep piling up until the next spin, making later spins potentially richer.
 
 5) Incentives and value flow
-- Players pay the asking price in the quoted asset and a separate fee for randomness processing.
+- Players pay the asking price in the quoted wrapped base asset and a separate fee for randomness processing.
 - The asking price is split: the treasury receives 90% by default and the optional team wallet can receive up to 10%. If no team wallet is set, the treasury receives 100%.
 - The prize pool is not funded by player payments; it is funded by continuous emissions minted straight into the pool.
 - Winners receive a slice of the pool sized by the odds table (for example, 1% or 5% of whatever sits in the pool when revealed).
@@ -76,7 +76,7 @@ It provides a simple, timed way to convert emissions into player-held tokens whi
 8. What happens if no one spins for a long time? The price eventually reaches zero while the pool keeps growing, making a future spin more attractive.
 9. Can someone rig the odds? Only the designated owner can change the odds; players rely on that role to keep them fair.
 10. What if the randomness provider fails? Rewards stay pending until a valid random reveal arrives.
-11. Does this use $DONUT today? In this code, the prize token is a separate unit and payments are in a wrapped base asset; direct $DONUT usage is not present here.
+11. Does RiskDivision use $DONUT today? In this code, the prize token is a separate unit and payments are in a wrapped base asset; direct $DONUT usage is not present here.
 12. Can I withdraw my reward units? Winners hold them outright; they can burn their own units, but turning them into other assets depends on external markets or tooling not shown here.
 
 12) Glossary
