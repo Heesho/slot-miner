@@ -26,7 +26,7 @@ module.exports = {
     mainnet: {
       url: RPC_URL,
       chainId: CHAIN_ID,
-      accounts: [PRIVATE_KEY],
+      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
     },
     hardhat: {},
   },

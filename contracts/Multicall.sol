@@ -96,12 +96,15 @@ contract Multicall is Ownable {
         quote = IRig(rig).quote();
     }
 
+    error Multicall__InsufficientFee();
+
     function spin(
         uint256 epochId,
         uint256 deadline,
         uint256 maxPrice
     ) external payable {
         uint256 entropyFee = IRig(rig).getEntropyFee();
+        if (msg.value < entropyFee) revert Multicall__InsufficientFee();
         uint256 payment = msg.value - entropyFee;
         IWETH(quote).deposit{value: payment}();
         IERC20(quote).safeApprove(rig, 0);
